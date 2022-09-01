@@ -35,7 +35,7 @@ modules:
         if [ -n "$CCACHE_DIR" ]; then
           install -dm755 ${FLATPAK_DEST}/bin
           for cmp in gcc g++; do
-            ln -s /usr/bin/ccache ${FLATPAK_DEST}/bin/x86_64-linux-musl-${cmp}
+            ln -s /usr/bin/ccache ${FLATPAK_DEST}/bin/${FLATPAK_ARCH}-linux-musl-${cmp}
           done
         fi
     cleanup:
@@ -44,7 +44,24 @@ modules:
   - name: musl-libc-shared
     buildsystem: simple
     build-commands:
-      - install -Dm755 /usr/lib/sdk/musl/x86_64-linux-musl/lib/libc.so ${FLATPAK_DEST}/lib/libc.musl-x86_64.so.1
+      - install -Dm755 /usr/lib/sdk/musl/${FLATPAK_ARCH}-linux-musl/lib/libc.so ${FLATPAK_DEST}/lib/libc.musl-${FLATPAK_ARCH}.so.1
+      # TODO: cosider enabling if patchelf doesn't break shared libs, or wait for the executables issue to be fixed
+     #- mkdir ${FLATPAK_ARCH}-linux-musl/lib
+     #- |
+     #  set -e
+     #  for l in atomic gcc_s gomp itm quadmath ssp stdc++; do
+     #  cp --preserve=mode,links --no-dereference \
+     #    /usr/lib/sdk/musl/${FLATPAK_ARCH}-linux-musl/lib/lib${l}.so* \
+     #    ${FLATPAK_ARCH}-linux-musl/lib/
+     ## possibly only libstdc++ needs to be patched as it's linked against libgcc_s
+     #- |
+     #  set -e
+     #  for f in $(find ${FLATPAK_ARCH}-linux-musl -type f}); do
+     #    patchelf --debug --add-rpath \
+     #      ${FLATPAK_DEST}/lib:${FLATPAK_DEST}/${FLATPAK_ARCH}-linux-musl/lib \
+     #      $f
+     #  done
+     #- cp -r ${FLATPAK_ARCH}-linux-musl ${FLATPAK_DEST}/
 
   - name: patchelf-static
     build-options: *musl-static-build-options
@@ -65,13 +82,25 @@ modules:
     build-commands:
       # TODO: drop listing .so shared libs if not needed
       - |
+        set -e
         for f in $(find cargo rustc rust-std-* \( -executable -a -type f \) -o -name '*.so'); do
           if [ "$(file --brief --mime-type $f)" = "text/x-shellscript" ]; then continue; fi
-          if [[ "$f" == *".so" ]]; then continue; fi
           echo "Found binary file: $f"
-          patchelf --set-interpreter /usr/lib/sdk/rust-musl/lib/libc.musl-x86_64.so.1 $f
+          if [[ "$f" != *".so" ]]; then
+          patchelf --debug --set-interpreter \
+            ${FLATPAK_DEST}/lib/libc.musl-${FLATPAK_ARCH}.so.1 \
+            $f
+          fi
+          patchelf --debug --add-rpath \
+          ${FLATPAK_DEST}/lib:${FLATPAK_DEST}/${FLATPAK_ARCH}-linux-musl/lib \
+          $f
         done
-      - ./install.sh --components=cargo,rustc,rust-std-x86_64-unknown-linux-musl --prefix=${FLATPAK_DEST}
+      - ./install.sh --components=cargo,rustc,rust-std-${FLATPAK_ARCH}-unknown-linux-musl --prefix=${FLATPAK_DEST}
+      # rustc and rust shared libs need libgcc_s
+      - install -Dm755 -t ${FLATPAK_DEST}/${FLATPAK_ARCH}-linux-musl/lib/
+        /usr/lib/sdk/musl/${FLATPAK_ARCH}-linux-musl/lib/libgcc_s.so.1
+      - patchelf --debug --add-rpath ${FLATPAK_DEST}/lib:${FLATPAK_DEST}/${FLATPAK_ARCH}-linux-musl/lib
+        ${FLATPAK_DEST}/${FLATPAK_ARCH}-linux-musl/lib/libgcc_s.so.1
     sources:
       - type: archive
         url: https://static.rust-lang.org/dist/rust-1.63.0-x86_64-unknown-linux-musl.tar.gz
